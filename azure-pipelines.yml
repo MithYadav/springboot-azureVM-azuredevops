@@ -8,6 +8,8 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
+  - group: acr-secrets  # ← ADDED: Links ACR_PASSWORD and ACR_USERNAME
+  
   # ACR Configuration
   dockerRegistryServiceConnection: 'ACR-Connection'
   containerRegistry: 'mithspringvmacr.azurecr.io'
@@ -16,15 +18,12 @@ variables:
   tag: '$(Build.BuildId)'
 
   # VM Configuration
-  sshServiceConnection: 'AzureVM-SSH'
+  sshServiceConnection: 'azure-vm-ssh'  # ← CHANGED: Match your actual service connection name
   vmIP: '20.220.217.203'
 
   # Container Configuration
   CONTAINER_NAME: 'springboot-container'
   APP_PORT: '8080'
-
-  # ACR Username
-  ACR_USERNAME: 'mithspringvmacr'
 
 stages:
 
@@ -133,7 +132,7 @@ stages:
                     # Remove old image
                     echo "Removing old images..."
 
-                    docker rmi $(containerRegistry)/$(imageRepository):$(tag) || true
+                    docker rmi $(containerRegistry)/$(imageRepository):latest || true
 
                     # Pull Latest Image
                     echo "Pulling latest Docker image..."
