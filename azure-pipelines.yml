@@ -2,56 +2,59 @@ trigger:
   branches:
     include:
       - main
-      - master
       - develop
 
 pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  # Docker image configuration
+  # ACR Configuration
   dockerRegistryServiceConnection: 'ACR-Connection'
-  imageRepository: 'springboot-app'
-  containerRegistry: 'myspringbootacr.azurecr.io'
+  imageRepository: 'springboot-app-vm'
+  containerRegistry: 'mithspringvmacr.azurecr.io'
   dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
   tag: '$(Build.BuildId)'
-  
-  # VM configuration
-  vmIP: '20.220.217.203'
-  vmUser: 'azureuser'
-  sshServiceConnection: 'AzureVM-SSH'
-  
-  # Application configuration
-  APP_NAME: 'spring-boot-app'
-  CONTAINER_NAME: 'springboot-container'
-  APP_PORT: '8080'
 
 stages:
-  #######################################
-  # STAGE 1: BUILD & PUSH DOCKER IMAGE
-  #######################################
-  - stage: Build
-    displayName: 'Build and Push Docker Image'
+  - stage: BuildAndPush
+    displayName: 'Build and Push Docker Image to ACR'
     jobs:
-      - job: BuildAndPush
-        displayName: 'Build Docker Image and Push to ACR'
+      - job: BuildJob
+        displayName: 'Build Spring Boot and Push to ACR'
         steps:
-          # Checkout code
+          # Step 1: Checkout code
           - checkout: self
+            displayName: 'Checkout Source Code'
 
-          # Build with Maven first (to create JAR)
+          # Step 2: Set up JDK 21
+          - task: JavaToolInstaller@0
+            displayName: 'Install JDK 21'
+            inputs:
+              versionSpec: '21'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+
+          # Step 3: Build with Maven
           - task: Maven@3
-            displayName: 'Maven Build'
+            displayName: 'Maven Build (clean package)'
             inputs:
               mavenPomFile: 'pom.xml'
               goals: 'clean package'
               options: '-DskipTests'
               publishJUnitResults: false
               javaHomeOption: 'JDKVersion'
-              jdkVersionOption: '17'
+              jdkVersionOption: '21'
               mavenVersionOption: 'Default'
 
-          # Build Docker image
+          # Step 4: List target directory (for debugging)
+          - script: |
+              echo "=== Listing target directory ==="
+              ls -lh target/
+              echo "=== JAR file details ==="
+              ls -lh target/*.jar
+            displayName: 'Show JAR file details'
+
+          # Step 5: Build Docker image
           - task: Docker@2
             displayName: 'Build Docker Image'
             inputs:
@@ -63,7 +66,7 @@ stages:
                 $(tag)
                 latest
 
-          # Push Docker image to ACR
+          # Step 6: Push Docker image to ACR
           - task: Docker@2
             displayName: 'Push Docker Image to ACR'
             inputs:
@@ -74,9 +77,18 @@ stages:
                 $(tag)
                 latest
 
-          # Display image info
+          # Step 7: Display success message
           - script: |
-              echo "Docker image pushed successfully!"
-              echo "Image: $(containerRegistry)/$(imageRepository):$(tag)"
-              echo "Also tagged as: $(containerRegistry)/$(imageRepository):latest"
-            displayName: 'Display Image Info'
+              echo "=========================================="
+              echo "✅ Docker Image Built and Pushed Successfully!"
+              echo "=========================================="
+              echo "Image Details:"
+              echo "  Registry: $(containerRegistry)"
+              echo "  Repository: $(imageRepository)"
+              echo "  Tags: $(tag), latest"
+              echo ""
+              echo "Full Image Names:"
+              echo "  $(containerRegistry)/$(imageRepository):$(tag)"
+              echo "  $(containerRegistry)/$(imageRepository):latest"
+              echo "=========================================="
+            displayName: 'Display Image Information'
