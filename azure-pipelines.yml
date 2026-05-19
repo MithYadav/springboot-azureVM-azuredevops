@@ -1,0 +1,184 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  # Global Variables
+  - name: dockerRegistryServiceConnection
+    value: 'ACR-Connection'
+  - name: containerRegistry
+    value: 'mithspringvmacr.azurecr.io'
+  - name: imageRepository
+    value: 'springboot-app-vm'
+  - name: dockerfilePath
+    value: '$(Build.SourcesDirectory)/Dockerfile'
+  - name: tag
+    value: '$(Build.BuildId)'
+
+  # VM Configuration
+  - name: sshServiceConnection
+    value: 'azure-vm-ssh'
+  - name: vmIP
+    value: '20.220.217.203'
+
+  # Container Configuration
+  - name: CONTAINER_NAME
+    value: 'springboot-container'
+  - name: APP_PORT
+    value: '8080'
+
+stages:
+
+#######################################
+# STAGE 1: BUILD AND PUSH TO ACR
+#######################################
+- stage: BuildAndPush
+  displayName: 'Build and Push Docker Image to ACR'
+  jobs:
+    - job: BuildJob
+      displayName: 'Build Docker Image and Push to ACR'
+      steps:
+        # Checkout source code
+        - checkout: self
+          displayName: 'Checkout Source Code'
+
+        # Build Docker Image (Multi-stage build using your Dockerfile)
+        - task: Docker@2
+          displayName: 'Build Docker Image'
+          inputs:
+            command: 'build'
+            repository: '$(imageRepository)'
+            dockerfile: '$(dockerfilePath)'
+            containerRegistry: '$(dockerRegistryServiceConnection)'
+            tags: |
+              $(tag)
+              latest
+            arguments: '--no-cache'
+
+        # Push Docker Image to Azure Container Registry
+        - task: Docker@2
+          displayName: 'Push Docker Image to ACR'
+          inputs:
+            command: 'push'
+            repository: '$(imageRepository)'
+            containerRegistry: '$(dockerRegistryServiceConnection)'
+            tags: |
+              $(tag)
+              latest
+
+        # Print visual summary of what was built and tracked
+        - script: |
+            echo "=========================================="
+            echo "Docker Image Built and Pushed Successfully"
+            echo "=========================================="
+            echo "Image Details:"
+            echo "Registry: $(containerRegistry)"
+            echo "Repository: $(imageRepository)"
+            echo "Tag: $(tag)"
+            echo ""
+            echo "Full Image Tracking Path:"
+            echo "$(containerRegistry)/$(imageRepository):$(tag)"
+            echo "=========================================="
+          displayName: 'Display Image Information'
+
+#######################################
+# STAGE 2: DEPLOY TO AZURE VM
+#######################################
+- stage: Deploy
+  displayName: 'Deploy to Azure VM'
+  dependsOn: BuildAndPush
+  condition: succeeded()
+  jobs:
+    - deployment: DeployToVM
+      displayName: 'Deploy Container on Azure VM'
+      environment: 'production-vm'
+      
+      # FIX: Linking the Library Group here ensures the deployment job strategy has access
+      variables:
+        - group: acr-secrets
+
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              # Establish secure SSH link and execute deployment scripts
+              - task: SSH@0
+                displayName: 'Deploy Docker Container on VM'
+                env:
+                  REMOTE_ACR_USER: $(ACR_USERNAME)
+                  REMOTE_ACR_PASS: $(ACR_PASSWORD)
+                inputs:
+                  sshEndpoint: '$(sshServiceConnection)'
+                  runOptions: 'inline'
+                  inline: |
+                    echo "===================================="
+                    echo "Starting Remote VM Deployment"
+                    echo "===================================="
+
+                    # Login to ACR using our mapped environment variables
+                    echo "Logging into Azure Container Registry..."
+                    echo "$REMOTE_ACR_PASS" | docker login $(containerRegistry) \
+                      -u "$REMOTE_ACR_USER" \
+                      --password-stdin
+
+                    # Stop and clear old running instances
+                    echo "Stopping existing container if running..."
+                    docker stop $(CONTAINER_NAME) || true
+                    docker rm $(CONTAINER_NAME) || true
+
+                    # Pull fresh tracking tag image down from your registry
+                    echo "Pulling target Docker image..."
+                    docker pull $(containerRegistry)/$(imageRepository):$(tag)
+
+                    # Spin up application container matching external/internal ports
+                    echo "Starting new container..."
+                    docker run -d \
+                      --name $(CONTAINER_NAME) \
+                      --restart unless-stopped \
+                      -p $(APP_PORT):8080 \
+                      -e SPRING_PROFILES_ACTIVE=prod \
+                      $(containerRegistry)/$(imageRepository):$(tag)
+
+                    # Give Spring Boot sufficient time to spin up internal Tomcat server context
+                    echo "Waiting for application lifecycle startup..."
+                    sleep 30
+
+                    # Check running containers state
+                    echo "===================================="
+                    echo "Container Runtime Status"
+                    echo "===================================="
+                    docker ps -a
+
+                    # Dump recent system logs to pipeline trace output for easy validation
+                    echo "===================================="
+                    echo "Container Application Logs"
+                    echo "===================================="
+                    docker logs --tail 50 $(CONTAINER_NAME)
+
+                    # Verify application health locally inside the VM environment
+                    echo "===================================="
+                    echo "Application Health Check"
+                    echo "===================================="
+                    curl -f http://localhost:8080/actuator/health || echo "Health endpoint unavailable"
+
+                    # Clean historical dangling images to maximize storage space efficiency
+                    echo "Cleaning old dangling Docker images..."
+                    docker image prune -af
+
+                    echo "===================================="
+                    echo "Deployment Completed Successfully"
+                    echo "===================================="
+                  readyTimeout: '20000'
+
+              # Display deployment URL tracking reference onto the console
+              - script: |
+                  echo "===================================="
+                  echo "Application Deployment Endpoint Location"
+                  echo "===================================="
+                  echo "http://$(vmIP):$(APP_PORT)"
+                displayName: 'Display Application URL'
