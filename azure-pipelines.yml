@@ -65,3 +65,80 @@ stages:
               echo "  $(containerRegistry)/$(imageRepository):latest"
               echo "=========================================="
             displayName: 'Display Image Information'
+#######################################
+# STAGE 2: DEPLOY TO AZURE VM
+#######################################
+- stage: Deploy
+  displayName: 'Deploy to Azure VM'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+    - deployment: DeployToVM
+      displayName: 'Pull and Run Docker Container on VM'
+      environment: 'production-vm'
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              # Deploy via SSH
+              - task: SSH@0
+                displayName: 'Deploy Docker Container on VM'
+                inputs:
+                  sshEndpoint: '$(sshServiceConnection)'
+                  runOptions: 'inline'
+                  inline: |
+                    echo "=== Starting Deployment ==="
+                    
+                    # Login to ACR (Using explicit strings to match your script)
+                    echo "Logging into ACR..."
+                    echo "$(ACR_PASSWORD)" | docker login mithspringvmacr.azurecr.io -u mithspringvmacr --password-stdin
+                    
+                    # Stop and remove existing container
+                    echo "Stopping existing container..."
+                    docker stop $(CONTAINER_NAME) || true
+                    docker rm $(CONTAINER_NAME) || true
+                    
+                    # Remove old image to keep disk space clean
+                    echo "Removing old images..."
+                    docker rmi mithspringvmacr.azurecr.io/$(imageRepository):latest || true
+                    
+                    # Pull latest image from ACR
+                    echo "Pulling latest image from ACR..."
+                    docker pull mithspringvmacr.azurecr.io/$(imageRepository):latest
+                    
+                    # Run new container
+                    echo "Starting new container..."
+                    docker run -d \
+                      --name $(CONTAINER_NAME) \
+                      --restart unless-stopped \
+                      -p $(APP_PORT):$(APP_PORT) \
+                      -e SPRING_PROFILES_ACTIVE=prod \
+                      mithspringvmacr.azurecr.io/$(imageRepository):latest
+                      
+                    # Wait for container to start
+                    echo "Waiting for container to start..."
+                    sleep 10
+                    
+                    # Check container status
+                    echo "=== Container Status ==="
+                    docker ps -a | grep $(CONTAINER_NAME)
+                    
+                    # Show container logs
+                    echo "=== Container Logs (last 50 lines) ==="
+                    docker logs --tail 50 $(CONTAINER_NAME)
+                    
+                    # Test the application locally on the VM
+                    echo "=== Testing Application ==="
+                    curl -f http://localhost:$(APP_PORT)/actuator/health || echo "Health check endpoint not available"
+                    
+                    echo "=== Deployment Complete ==="
+                readyTimeout: '20000'
+
+              # Verify deployment tracking info on the Azure DevOps agent console
+              - script: |
+                  echo "Application should be accessible at:"
+                  echo "http://$(vmIP):$(APP_PORT)"
+                displayName: 'Display Application URL'
+
+
+    
