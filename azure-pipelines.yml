@@ -16,7 +16,7 @@ variables:
   tag: '$(Build.BuildId)'
 
   # VM Configuration
-  sshServiceConnection: 'AzureVM-SSH'
+  sshServiceConnection: 'azure-vm-ssh'
   vmIP: '20.220.217.203'
 
   # Container Configuration
