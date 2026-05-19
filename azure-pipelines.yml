@@ -1,0 +1,107 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: acr-secrets
+  - name: dockerRegistryServiceConnection
+    value: 'ACR-Connection'
+  - name: containerRegistry
+    value: 'mithspringvmacr.azurecr.io'
+  - name: imageRepository
+    value: 'springboot-app-vm'
+  - name: dockerfilePath
+    value: '$(Build.SourcesDirectory)/Dockerfile'
+  - name: tag
+    value: '$(Build.BuildId)'
+  - name: sshServiceConnection
+    value: 'azure-vm-ssh'
+  - name: vmIP
+    value: '20.220.217.203'
+  - name: CONTAINER_NAME
+    value: 'springboot-container'
+  - name: APP_PORT
+    value: '8080'
+  - name: ACR_USERNAME
+    value: 'mithspringvmacr'
+
+stages:
+- stage: BuildAndPush
+  displayName: 'Build and Push Docker Image to ACR'
+  jobs:
+    - job: BuildJob
+      displayName: 'Build Docker Image and Push to ACR'
+      steps:
+        - checkout: self
+          displayName: 'Checkout Source Code'
+
+        - task: Docker@2
+          displayName: 'Build Docker Image'
+          inputs:
+            command: 'build'
+            repository: '$(imageRepository)'
+            dockerfile: '$(dockerfilePath)'
+            containerRegistry: '$(dockerRegistryServiceConnection)'
+            tags: |
+              $(tag)
+              latest
+            arguments: '--no-cache'
+
+        - task: Docker@2
+          displayName: 'Push Docker Image to ACR'
+          inputs:
+            command: 'push'
+            repository: '$(imageRepository)'
+            containerRegistry: '$(dockerRegistryServiceConnection)'
+            tags: |
+              $(tag)
+              latest
+
+- stage: Deploy
+  displayName: 'Deploy to Azure VM'
+  dependsOn: BuildAndPush
+  condition: succeeded()
+  jobs:
+    - deployment: DeployToVM
+      displayName: 'Deploy Container on Azure VM'
+      environment: 'production-vm'
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - task: SSH@0
+                displayName: 'Deploy Docker Container on VM'
+                env:
+                  REMOTE_ACR_PASSWORD: $(ACR_PASSWORD)
+                inputs:
+                  sshEndpoint: '$(sshServiceConnection)'
+                  runOptions: 'inline'
+                  inline: |
+                    echo "Logging into Azure Container Registry..."
+                    echo "$REMOTE_ACR_PASSWORD" | docker login $(containerRegistry) -u $(ACR_USERNAME) --password-stdin
+                    
+                    echo "Stopping existing container..."
+                    docker stop $(CONTAINER_NAME) || true
+                    docker rm $(CONTAINER_NAME) || true
+                    
+                    echo "Pulling target Docker image..."
+                    docker pull $(containerRegistry)/$(imageRepository):$(tag)
+                    
+                    echo "Starting new container..."
+                    docker run -d --name $(CONTAINER_NAME) --restart unless-stopped -p $(APP_PORT):8080 -e SPRING_PROFILES_ACTIVE=prod $(containerRegistry)/$(imageRepository):$(tag)
+                    
+                    sleep 15
+                    docker ps -a
+                    docker logs --tail 50 $(CONTAINER_NAME)
+                    curl -f http://localhost:8080/actuator/health || echo "Health endpoint unavailable"
+                    docker image prune -af
+                  readyTimeout: '20000'
+
+              - script: |
+                  echo "http://$(vmIP):$(APP_PORT)"
+                displayName: 'Display Application URL'
