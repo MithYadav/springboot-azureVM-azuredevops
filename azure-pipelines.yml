@@ -10,135 +10,188 @@ pool:
 variables:
   # ACR Configuration
   dockerRegistryServiceConnection: 'ACR-Connection'
-  imageRepository: 'springboot-app-vm'
   containerRegistry: 'mithspringvmacr.azurecr.io'
+  imageRepository: 'springboot-app-vm'
   dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
   tag: '$(Build.BuildId)'
 
+  # VM Configuration
+  sshServiceConnection: 'AzureVM-SSH'
+  vmIP: '20.220.217.203'
+
+  # Container Configuration
+  CONTAINER_NAME: 'springboot-container'
+  APP_PORT: '8080'
+
+  # ACR Username
+  ACR_USERNAME: 'mithspringvmacr'
+
 stages:
-  - stage: BuildAndPush
-    displayName: 'Build and Push Docker Image to ACR'
-    jobs:
-      - job: BuildJob
-        displayName: 'Build Docker Image and Push to ACR'
-        steps:
-          # Step 1: Checkout code
-          - checkout: self
-            displayName: 'Checkout Source Code'
 
-          # Step 2: Build Docker image (Maven build happens inside Docker)
-          - task: Docker@2
-            displayName: 'Build Docker Image (Multi-stage)'
-            inputs:
-              command: 'build'
-              repository: '$(imageRepository)'
-              dockerfile: '$(dockerfilePath)'
-              containerRegistry: '$(dockerRegistryServiceConnection)'
-              tags: |
-                $(tag)
-                latest
-              arguments: '--no-cache'
+#######################################
+# STAGE 1: BUILD AND PUSH TO ACR
+#######################################
+- stage: BuildAndPush
+  displayName: 'Build and Push Docker Image to ACR'
 
-          # Step 3: Push Docker image to ACR
-          - task: Docker@2
-            displayName: 'Push Docker Image to ACR'
-            inputs:
-              command: 'push'
-              repository: '$(imageRepository)'
-              containerRegistry: '$(dockerRegistryServiceConnection)'
-              tags: |
-                $(tag)
-                latest
+  jobs:
+    - job: BuildJob
+      displayName: 'Build Docker Image and Push to ACR'
 
-          # Step 4: Display success message
-          - script: |
-              echo "=========================================="
-              echo "✅ Docker Image Built and Pushed Successfully!"
-              echo "=========================================="
-              echo "Image Details:"
-              echo "  Registry: $(containerRegistry)"
-              echo "  Repository: $(imageRepository)"
-              echo "  Tags: $(tag), latest"
-              echo ""
-              echo "Full Image Names:"
-              echo "  $(containerRegistry)/$(imageRepository):$(tag)"
-              echo "  $(containerRegistry)/$(imageRepository):latest"
-              echo "=========================================="
-            displayName: 'Display Image Information'
+      steps:
+
+        # Checkout source code
+        - checkout: self
+          displayName: 'Checkout Source Code'
+
+        # Build Docker Image
+        - task: Docker@2
+          displayName: 'Build Docker Image'
+          inputs:
+            command: 'build'
+            repository: '$(imageRepository)'
+            dockerfile: '$(dockerfilePath)'
+            containerRegistry: '$(dockerRegistryServiceConnection)'
+            tags: |
+              $(tag)
+              latest
+            arguments: '--no-cache'
+
+        # Push Docker Image
+        - task: Docker@2
+          displayName: 'Push Docker Image to ACR'
+          inputs:
+            command: 'push'
+            repository: '$(imageRepository)'
+            containerRegistry: '$(dockerRegistryServiceConnection)'
+            tags: |
+              $(tag)
+              latest
+
+        # Display Build Information
+        - script: |
+            echo "=========================================="
+            echo "Docker Image Built and Pushed Successfully"
+            echo "=========================================="
+
+            echo "Image Details:"
+            echo "Registry: $(containerRegistry)"
+            echo "Repository: $(imageRepository)"
+            echo "Tag: $(tag)"
+
+            echo ""
+            echo "Full Image:"
+            echo "$(containerRegistry)/$(imageRepository):$(tag)"
+            echo ""
+          displayName: 'Display Image Information'
+
 #######################################
 # STAGE 2: DEPLOY TO AZURE VM
 #######################################
 - stage: Deploy
   displayName: 'Deploy to Azure VM'
-  dependsOn: Build
+  dependsOn: BuildAndPush
   condition: succeeded()
+
   jobs:
     - deployment: DeployToVM
-      displayName: 'Pull and Run Docker Container on VM'
+      displayName: 'Deploy Container on Azure VM'
       environment: 'production-vm'
+
       strategy:
         runOnce:
           deploy:
+
             steps:
-              # Deploy via SSH
+
+              # SSH into VM and Deploy
               - task: SSH@0
                 displayName: 'Deploy Docker Container on VM'
+
                 inputs:
                   sshEndpoint: '$(sshServiceConnection)'
                   runOptions: 'inline'
+
                   inline: |
-                    echo "=== Starting Deployment ==="
-                    
-                    # Login to ACR (Using explicit strings to match your script)
-                    echo "Logging into ACR..."
-                    echo "$(ACR_PASSWORD)" | docker login mithspringvmacr.azurecr.io -u mithspringvmacr --password-stdin
-                    
-                    # Stop and remove existing container
+                    echo "===================================="
+                    echo "Starting Deployment"
+                    echo "===================================="
+
+                    # Login to ACR
+                    echo "Logging into Azure Container Registry..."
+
+                    echo "$(ACR_PASSWORD)" | docker login $(containerRegistry) \
+                    -u $(ACR_USERNAME) \
+                    --password-stdin
+
+                    # Stop Existing Container
                     echo "Stopping existing container..."
+
                     docker stop $(CONTAINER_NAME) || true
                     docker rm $(CONTAINER_NAME) || true
-                    
-                    # Remove old image to keep disk space clean
+
+                    # Remove old image
                     echo "Removing old images..."
-                    docker rmi mithspringvmacr.azurecr.io/$(imageRepository):latest || true
-                    
-                    # Pull latest image from ACR
-                    echo "Pulling latest image from ACR..."
-                    docker pull mithspringvmacr.azurecr.io/$(imageRepository):latest
-                    
-                    # Run new container
+
+                    docker rmi $(containerRegistry)/$(imageRepository):$(tag) || true
+
+                    # Pull Latest Image
+                    echo "Pulling latest Docker image..."
+
+                    docker pull $(containerRegistry)/$(imageRepository):$(tag)
+
+                    # Run New Container
                     echo "Starting new container..."
+
                     docker run -d \
                       --name $(CONTAINER_NAME) \
                       --restart unless-stopped \
                       -p $(APP_PORT):$(APP_PORT) \
                       -e SPRING_PROFILES_ACTIVE=prod \
-                      mithspringvmacr.azurecr.io/$(imageRepository):latest
-                      
-                    # Wait for container to start
-                    echo "Waiting for container to start..."
-                    sleep 10
-                    
-                    # Check container status
-                    echo "=== Container Status ==="
-                    docker ps -a | grep $(CONTAINER_NAME)
-                    
-                    # Show container logs
-                    echo "=== Container Logs (last 50 lines) ==="
-                    docker logs --tail 50 $(CONTAINER_NAME)
-                    
-                    # Test the application locally on the VM
-                    echo "=== Testing Application ==="
-                    curl -f http://localhost:$(APP_PORT)/actuator/health || echo "Health check endpoint not available"
-                    
-                    echo "=== Deployment Complete ==="
-                readyTimeout: '20000'
+                      $(containerRegistry)/$(imageRepository):$(tag)
 
-              # Verify deployment tracking info on the Azure DevOps agent console
+                    # Wait for app startup
+                    echo "Waiting for application startup..."
+
+                    sleep 15
+
+                    # Check running containers
+                    echo "===================================="
+                    echo "Container Status"
+                    echo "===================================="
+
+                    docker ps -a
+
+                    # Show logs
+                    echo "===================================="
+                    echo "Container Logs"
+                    echo "===================================="
+
+                    docker logs --tail 50 $(CONTAINER_NAME)
+
+                    # Health Check
+                    echo "===================================="
+                    echo "Application Health Check"
+                    echo "===================================="
+
+                    curl -f http://localhost:$(APP_PORT)/actuator/health || echo "Health endpoint unavailable"
+
+                    # Cleanup unused images
+                    echo "Cleaning old Docker images..."
+
+                    docker image prune -af
+
+                    echo "===================================="
+                    echo "Deployment Completed Successfully"
+                    echo "===================================="
+
+                  readyTimeout: '20000'
+
+              # Display URL
               - script: |
-                  echo "Application should be accessible at:"
+                  echo "===================================="
+                  echo "Application URL"
+                  echo "===================================="
+
                   echo "http://$(vmIP):$(APP_PORT)"
                 displayName: 'Display Application URL'
-
-
-    
