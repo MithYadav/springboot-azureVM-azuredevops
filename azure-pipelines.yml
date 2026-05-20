@@ -108,10 +108,16 @@ stages:
             steps:
               # Establish secure SSH link and execute deployment scripts
               - task: SSH@0
+              
                 displayName: 'Deploy Docker Container on VM'
                 env:
                   REMOTE_ACR_USER: $(ACR_USERNAME)
                   REMOTE_ACR_PASS: $(ACR_PASSWORD)
+                  REMOTE_REGISTRY: $(containerRegistry)
+                  REMOTE_IMAGE_REPO: $(imageRepository)
+                  REMOTE_TAG: $(tag)
+                  REMOTE_CONTAINER: $(CONTAINER_NAME)
+                  REMOTE_PORT: $(APP_PORT)
                 inputs:
                   sshEndpoint: '$(sshServiceConnection)'
                   runOptions: 'inline'
@@ -122,27 +128,27 @@ stages:
 
                     # Login to ACR using our mapped environment variables
                     echo "Logging into Azure Container Registry..."
-                    echo "$REMOTE_ACR_PASS" | docker login $(containerRegistry) \
+                    echo "$REMOTE_ACR_PASS" | docker login $REMOTE_REGISTRY \
                       -u "$REMOTE_ACR_USER" \
                       --password-stdin
 
                     # Stop and clear old running instances
                     echo "Stopping existing container if running..."
-                    docker stop $(CONTAINER_NAME) || true
-                    docker rm $(CONTAINER_NAME) || true
+                    docker stop $REMOTE_CONTAINER || true
+                    docker rm $REMOTE_CONTAINER || true
 
                     # Pull fresh tracking tag image down from your registry
                     echo "Pulling target Docker image..."
-                    docker pull $(containerRegistry)/$(imageRepository):$(tag)
+                    docker pull $REMOTE_REGISTRY/$REMOTE_IMAGE_REPO:$REMOTE_TAG
 
                     # Spin up application container matching external/internal ports
                     echo "Starting new container..."
                     docker run -d \
-                      --name $(CONTAINER_NAME) \
+                      --name $REMOTE_CONTAINER \
                       --restart unless-stopped \
-                      -p $(APP_PORT):8080 \
+                      -p $REMOTE_PORT:8080 \
                       -e SPRING_PROFILES_ACTIVE=prod \
-                      $(containerRegistry)/$(imageRepository):$(tag)
+                      $REMOTE_REGISTRY/$REMOTE_IMAGE_REPO:$REMOTE_TAG
 
                     # Give Spring Boot sufficient time to spin up internal Tomcat server context
                     echo "Waiting for application lifecycle startup..."
@@ -158,7 +164,7 @@ stages:
                     echo "===================================="
                     echo "Container Application Logs"
                     echo "===================================="
-                    docker logs --tail 50 $(CONTAINER_NAME)
+                    docker logs --tail 50 $REMOTE_CONTAINER
 
                     # Verify application health locally inside the VM environment
                     echo "===================================="
@@ -180,5 +186,5 @@ stages:
                   echo "===================================="
                   echo "Application Deployment Endpoint Location"
                   echo "===================================="
-                  echo "http://$(vmIP):$(APP_PORT)"
+                  echo "http://$(vmIP):REMOTE_PORT"
                 displayName: 'Display Application URL'
