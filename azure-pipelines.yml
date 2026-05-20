@@ -113,13 +113,13 @@ stages:
                   sshEndpoint: '$(sshServiceConnection)'
                   runOptions: 'inline'
                   inline: |
-                    export REMOTE_ACR_USER: $(ACR_USERNAME)
-                    export REMOTE_ACR_PASS: $(ACR_PASSWORD)
-                    export REMOTE_REGISTRY: $(containerRegistry)
-                    export REMOTE_IMAGE_REPO: $(imageRepository)
-                    export REMOTE_TAG: $(tag)
-                    export REMOTE_CONTAINER: $(CONTAINER_NAME)
-                    export REMOTE_PORT: $(APP_PORT)
+                    export REMOTE_ACR_USER=$(ACR_USERNAME)
+                    export REMOTE_ACR_PASS=$(ACR_PASSWORD)
+                    export REMOTE_REGISTRY=$(containerRegistry)
+                    export REMOTE_IMAGE_REPO=$(imageRepository)
+                    export REMOTE_TAG=$(tag)
+                    export REMOTE_CONTAINER=$(CONTAINER_NAME)
+                    export REMOTE_PORT=$(APP_PORT)
                     echo "===================================="
                     echo "Starting Remote VM Deployment"
                     echo "===================================="
@@ -184,5 +184,5 @@ stages:
                   echo "===================================="
                   echo "Application Deployment Endpoint Location"
                   echo "===================================="
-                  echo "http://$(vmIP):REMOTE_PORT"
+                  echo "http://$(vmIP):$(APP_PORT)"
                 displayName: 'Display Application URL'
