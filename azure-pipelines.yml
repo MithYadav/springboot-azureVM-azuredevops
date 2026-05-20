@@ -108,20 +108,18 @@ stages:
             steps:
               # Establish secure SSH link and execute deployment scripts
               - task: SSH@0
-              
                 displayName: 'Deploy Docker Container on VM'
-                env:
-                  REMOTE_ACR_USER: $(ACR_USERNAME)
-                  REMOTE_ACR_PASS: $(ACR_PASSWORD)
-                  REMOTE_REGISTRY: $(containerRegistry)
-                  REMOTE_IMAGE_REPO: $(imageRepository)
-                  REMOTE_TAG: $(tag)
-                  REMOTE_CONTAINER: $(CONTAINER_NAME)
-                  REMOTE_PORT: $(APP_PORT)
                 inputs:
                   sshEndpoint: '$(sshServiceConnection)'
                   runOptions: 'inline'
                   inline: |
+                    export REMOTE_ACR_USER: $(ACR_USERNAME)
+                    export REMOTE_ACR_PASS: $(ACR_PASSWORD)
+                    export REMOTE_REGISTRY: $(containerRegistry)
+                    export REMOTE_IMAGE_REPO: $(imageRepository)
+                    export REMOTE_TAG: $(tag)
+                    export REMOTE_CONTAINER: $(CONTAINER_NAME)
+                    export REMOTE_PORT: $(APP_PORT)
                     echo "===================================="
                     echo "Starting Remote VM Deployment"
                     echo "===================================="
