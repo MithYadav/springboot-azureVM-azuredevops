@@ -168,7 +168,7 @@ stages:
                     echo "===================================="
                     echo "Application Health Check"
                     echo "===================================="
-                    curl -f http://localhost:8080/actuator/health || echo "Health endpoint unavailable"
+                    curl -s -f http://localhost:8080/actuator/health || echo "Health endpoint unavailable"
 
                     # Clean historical dangling images to maximize storage space efficiency
                     echo "Cleaning old dangling Docker images..."
